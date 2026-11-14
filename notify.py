@@ -66,6 +66,18 @@ def slack_text(a: dict, summary: str, sim_date: str) -> str:
             f"sim date {sim_date}\n{summary}\n*Owner:* {a['owner']}")
 
 
+def digest_text(alerts: list[dict], sim_date: str, max_lines: int = 10) -> str:
+    """One Slack message for the alerts beyond the per-step cap, listing each claim."""
+    lines = [f":package: *{len(alerts)} more alert{'s' if len(alerts) > 1 else ''} on {sim_date}* "
+             "(lower priority; tickets created, see the ticket queue):"]
+    for a in alerts[:max_lines]:
+        dot = ":red_circle:" if a["tier"] == "critical" else ":large_yellow_circle:"
+        lines.append(f"{dot} {a['claim_id']} · {a['team']}, {a['city']} · {a['reason']} · {a['next_step'].split(';')[0]}")
+    if len(alerts) > max_lines:
+        lines.append(f"…and {len(alerts) - max_lines} more in the ticket queue.")
+    return "\n".join(lines)
+
+
 def slack_blocks(a: dict, text: str, ticket_id: int) -> list[dict]:
     """Alert text plus action buttons. Button values carry the ticket id (and target team)."""
     buttons = []

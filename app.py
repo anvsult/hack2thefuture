@@ -142,9 +142,9 @@ def run_actions(alerts: pd.DataFrame) -> list[dict]:
                 summary, src, slack = notify.template_summary(a), "template", "in digest"
             store.finish(con, tid, summary, src, slack)
             new.append({**a, "slack": slack})
-        extra = len(fresh) - MAX_SENDS_PER_RUN
-        if extra > 0:
-            notify.send_slack(f":package: {extra} more alerts on {sim}. See the ticket queue.", dry_run)
+        digest = [a for a in new if a["slack"] == "in digest"]
+        if digest:
+            notify.send_slack(notify.digest_text(digest, sim), dry_run)
     return new
 
 
