@@ -1,6 +1,7 @@
 """SQLite storage for tickets and the alert-sent log. Survives Streamlit reruns and restarts."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-DB_PATH = Path(__file__).parent / "claims_alerts.db"
+DB_PATH = Path(os.environ.get("CLAIMS_DB", Path(__file__).parent / "claims_alerts.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tickets (
