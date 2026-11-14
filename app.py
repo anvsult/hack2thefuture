@@ -9,7 +9,10 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
-load_dotenv()  # SLACK_WEBHOOK_URL, GEMINI_API_KEY from the local .env file (gitignored)
+from pathlib import Path  # noqa: E402
+
+# SLACK_WEBHOOK_URL, GEMINI_API_KEY from the local .env file (gitignored).
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 import notify  # noqa: E402
 import store
@@ -111,9 +114,13 @@ alerts = detect(claims, today, predictor, th, uplift["uplift"])
 def run_actions(alerts: pd.DataFrame) -> list[dict]:
     """Create a ticket for every new (claim, rule, tier); post the top ones to Slack."""
     new = []
+    sim = today.date().isoformat()
+    with store.connect() as con:
+        removed = store.prune_after(con, sim)       # clock moved back: drop tickets from the future
+    if removed:
+        st.toast(f"Clock moved back: cleared {removed} ticket(s) dated after {sim}")
     if alerts.empty:
         return new
-    sim = today.date().isoformat()
     with store.connect() as con:
         fresh = [a for a in alerts.to_dict("records")
                  if not store.already_sent(con, a["claim_id"], a["rule"], a["tier"])]
@@ -139,7 +146,15 @@ def run_actions(alerts: pd.DataFrame) -> list[dict]:
 
 new_alerts = run_actions(alerts)
 if new_alerts:
-    st.toast(f"{len(new_alerts)} new ticket(s) on {today.date()}")
+    sent = sum(a["slack"] == "sent" for a in new_alerts)
+    failed = [a["slack"] for a in new_alerts if a["slack"].startswith("failed")]
+    st.toast(f"{len(new_alerts)} new ticket(s) on {today.date()}"
+             + (f", {sent} posted to Slack" if sent else ""))
+    if failed:
+        st.toast(f"Slack post failed: {failed[0]}", icon=":material/error:")
+elif st.session_state.get("last_day") != today:
+    st.toast(f"No new alerts on {today.date()}. Each claim alerts once per tier.")
+st.session_state.last_day = today
 
 # ---------------------------------------------------------------- header
 st.title("Claims Delay Watch")

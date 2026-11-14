@@ -81,3 +81,14 @@ def tickets(con: sqlite3.Connection) -> pd.DataFrame:
 
 def reset(con: sqlite3.Connection) -> None:
     con.execute("DELETE FROM tickets")
+
+
+def prune_after(con: sqlite3.Connection, sim_date: str) -> int:
+    """Delete tickets created on a simulated date after `sim_date`.
+
+    When the clock moves backwards, those tickets are from the future and would
+    otherwise block the same alerts (dedupe) from firing again.
+    """
+    cur = con.execute("DELETE FROM tickets WHERE sim_date > ?", (sim_date,))
+    con.commit()
+    return cur.rowcount

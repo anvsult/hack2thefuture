@@ -34,7 +34,7 @@ def ai_configured() -> bool:
     return bool(os.environ.get(GEMINI_ENV))
 
 
-def ai_summary(a: dict, timeout_s: float = 8.0) -> tuple[str, str]:
+def ai_summary(a: dict, timeout_s: float = 15.0) -> tuple[str, str]:  # Gemini rejects deadlines < 10 s
     """Return (text, source). Falls back to the template on any failure, so the demo never blocks."""
     if not ai_configured():
         return template_summary(a), "template"
