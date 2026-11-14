@@ -178,7 +178,9 @@ def kpis(day: pd.Timestamp, day_alerts: pd.DataFrame) -> dict:
         "now": premium_at_risk_total(day_alerts),
         "open": int(is_open.sum()),
         "past": int((ages >= th.critical_days).sum()),
-        "crit": int((day_alerts["tier"] == "critical").sum()) if not day_alerts.empty else 0,
+        # Unique claims with at least one critical alert (a stalled $10k+ claim counts once, not twice).
+        "crit": (int(day_alerts.loc[day_alerts["tier"] == "critical", "claim_id"].nunique())
+                 if not day_alerts.empty else 0),
     }
 
 
@@ -229,7 +231,10 @@ k1.metric("Premium at risk now", f"${now_k['now']:,.0f}", fmt_delta("now", True)
                f"{uplift['slow_rate']:.0%} after 30 days).")
 k2.metric("Open claims", now_k["open"], fmt_delta("open"), delta_color="inverse")
 k3.metric(f"Open {th.critical_days}+ days", now_k["past"], fmt_delta("past"), delta_color="inverse")
-k4.metric("Critical alerts", now_k["crit"], fmt_delta("crit"), delta_color="inverse")
+k4.metric("Claims needing action", now_k["crit"], fmt_delta("crit"), delta_color="inverse",
+          help=f"Open claims with a critical alert: already {th.critical_days}+ days old, predicted to pass "
+               f"{th.critical_days} days, or a $10k+ claim stuck in senior review. Each claim counts once. "
+               f"The gap to 'Open {th.critical_days}+ days' is the claims caught early by the prediction.")
 
 # Change banner: one line that says what the last clock step did.
 with st.container(border=True, horizontal=True, vertical_alignment="center", gap="medium"):
