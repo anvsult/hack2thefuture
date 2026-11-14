@@ -1,3 +1,4 @@
+google-auth==2.62.2
 google-genai==3.3.0
 numpy==2.5.4
 pandas==3.1.1
@@ -5,4 +6,5 @@ plotly==7.1.0
 python-dotenv==1.2.4
 requests==2.34.2
 scikit-learn==1.9.1
+slack_sdk==3.47.0
 streamlit==1.67.0

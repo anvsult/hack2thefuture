@@ -5,3 +5,6 @@ __pycache__/
 .streamlit/secrets.toml
 .claude/
 .plans/
+# Google service-account keys
+service-account*.json
+*credentials*.json

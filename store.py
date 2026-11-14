@@ -34,12 +34,40 @@ CREATE TABLE IF NOT EXISTS tickets (
 """
 
 
+# Columns added after the first release; added to existing databases on connect.
+EXTRA_COLUMNS = {
+    "action_taken": "TEXT",   # e.g. "Reassigned to Team B"
+    "handled_by": "TEXT",     # Slack user who clicked
+    "handled_at": "TEXT",     # wall-clock time of the click
+    "calendar_link": "TEXT",  # retention call event (API event link or prefilled template link)
+}
+
+ACTIVITY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS activity (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL,
+    ticket_id  INTEGER,
+    claim_id   TEXT,
+    who        TEXT,
+    action     TEXT
+);
+"""
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    have = {r[1] for r in con.execute("PRAGMA table_info(tickets)")}
+    for name, kind in EXTRA_COLUMNS.items():
+        if name not in have:
+            con.execute(f"ALTER TABLE tickets ADD COLUMN {name} {kind}")
+
+
 @contextmanager
 def connect(path: Path | None = None):
-    con = sqlite3.connect(path or DB_PATH)
+    con = sqlite3.connect(path or DB_PATH, timeout=5)
     con.row_factory = sqlite3.Row
     try:
-        con.executescript(SCHEMA)
+        con.executescript(SCHEMA + ACTIVITY_SCHEMA)
+        _migrate(con)
         yield con
         con.commit()
     finally:
@@ -79,8 +107,33 @@ def tickets(con: sqlite3.Connection) -> pd.DataFrame:
     return pd.read_sql_query("SELECT * FROM tickets ORDER BY id DESC", con)
 
 
+def get_ticket(con: sqlite3.Connection, ticket_id: int) -> dict | None:
+    row = con.execute("SELECT * FROM tickets WHERE id=?", (ticket_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def record_action(con: sqlite3.Connection, ticket_id: int, *, status: str | None, action: str,
+                  who: str, calendar_link: str | None = None) -> None:
+    """Apply a Slack button click to a ticket and log it in the activity feed."""
+    now = datetime.now().isoformat(timespec="seconds")
+    t = get_ticket(con, ticket_id)
+    con.execute(
+        """UPDATE tickets SET status=COALESCE(?, status), action_taken=?, handled_by=?, handled_at=?,
+                              calendar_link=COALESCE(?, calendar_link) WHERE id=?""",
+        (status, action, who, now, calendar_link, ticket_id))
+    con.execute("INSERT INTO activity (at, ticket_id, claim_id, who, action) VALUES (?,?,?,?,?)",
+                (now, ticket_id, t["claim_id"] if t else None, who, action))
+    con.commit()
+
+
+def activity(con: sqlite3.Connection, limit: int = 10) -> pd.DataFrame:
+    return pd.read_sql_query("SELECT at, who, claim_id, action FROM activity ORDER BY id DESC LIMIT ?",
+                             con, params=(limit,))
+
+
 def reset(con: sqlite3.Connection) -> None:
     con.execute("DELETE FROM tickets")
+    con.execute("DELETE FROM activity")
 
 
 def prune_after(con: sqlite3.Connection, sim_date: str) -> int:

@@ -66,14 +66,45 @@ def slack_text(a: dict, summary: str, sim_date: str) -> str:
             f"sim date {sim_date}\n{summary}\n*Owner:* {a['owner']}")
 
 
-def send_slack(text: str, dry_run: bool) -> str:
+def slack_blocks(a: dict, text: str, ticket_id: int) -> list[dict]:
+    """Alert text plus action buttons. Button values carry the ticket id (and target team)."""
+    buttons = []
+    step = a["next_step"]
+    if a["rule"] == "review_stall":
+        buttons.append(_button("Escalate to senior reviewer", "escalate", f"{ticket_id}", "primary"))
+    elif "Reassign to " in step:
+        team = step.split("Reassign to ", 1)[1].split(" (")[0]
+        buttons.append(_button(f"Reassign to {team}", "reassign", f"{ticket_id}|{team}", "primary"))
+    else:
+        buttons.append(_button("Fast-track", "fasttrack", f"{ticket_id}", "primary"))
+    if "Retention" in step:
+        buttons.append(_button("Book retention call", "book_call", f"{ticket_id}"))
+    buttons.append(_button("Mark resolved", "resolve", f"{ticket_id}"))
+    public = os.environ.get("PUBLIC_URL")
+    if public:
+        buttons.append({"type": "button", "action_id": "open", "url": public,
+                        "text": {"type": "plain_text", "text": "Open dashboard"}})
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {"type": "actions", "elements": buttons}]
+
+
+def _button(label: str, action_id: str, value: str, style: str | None = None) -> dict:
+    b = {"type": "button", "action_id": action_id, "value": value,
+         "text": {"type": "plain_text", "text": label}}
+    if style:
+        b["style"] = style
+    return b
+
+
+def send_slack(text: str, dry_run: bool, blocks: list[dict] | None = None) -> str:
     if dry_run:
         return "dry-run"
     url = os.environ.get(SLACK_ENV)
     if not url:
         return f"failed: {SLACK_ENV} not set"
     try:
-        r = requests.post(url, json={"text": text}, timeout=5)
+        body = {"text": text, **({"blocks": blocks} if blocks else {})}
+        r = requests.post(url, json=body, timeout=5)
         return "sent" if r.ok else f"failed: HTTP {r.status_code}"
     except requests.RequestException as e:
         return f"failed: {type(e).__name__}"

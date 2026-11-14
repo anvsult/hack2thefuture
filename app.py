@@ -133,7 +133,8 @@ def run_actions(alerts: pd.DataFrame) -> list[dict]:
                 live = not dry_run and notify.slack_configured()
                 summary, src = (notify.ai_summary(a) if (use_ai and live)
                                 else (notify.template_summary(a), "template"))
-                slack = notify.send_slack(notify.slack_text(a, summary, sim), dry_run)
+                text = notify.slack_text(a, summary, sim)
+                slack = notify.send_slack(text, dry_run, notify.slack_blocks(a, text, tid))
             else:
                 summary, src, slack = notify.template_summary(a), "template", "in digest"
             store.finish(con, tid, summary, src, slack)
@@ -304,30 +305,35 @@ with tab_alerts:
                    f"(age or predicted total). Review stall: $10k+ claim open {sla}+ days "
                    f"(75th percentile of past $10k+ close times; the data has no review timestamp).")
 
-    st.subheader("Ticket queue")
-    with store.connect() as con:
-        tk = store.tickets(con)
-    if tk.empty:
-        st.info("No tickets yet. Move the clock forward.")
-    else:
-        c1, c2, c3 = st.columns(3)
+    # Refreshes every 3 s so clicks on Slack buttons show up here without touching the page.
+    @st.fragment(run_every=3)
+    def ticket_queue():
+        with store.connect() as con:
+            tk = store.tickets(con)
+            act = store.activity(con)
+        st.subheader("Actions from Slack")
+        if act.empty:
+            st.caption("Button clicks in Slack (reassign, escalate, book a call, resolve) appear here.")
+        else:
+            for r in act.itertuples():
+                st.markdown(f"`{r.at[11:19]}` **{r.who}** · {r.claim_id} · {r.action}")
+        st.subheader("Ticket queue")
+        if tk.empty:
+            st.info("No tickets yet. Move the clock forward.")
+            return
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Tickets", len(tk))
         c2.metric("Open", int((tk["status"] == "open").sum()))
-        c3.metric("Posted to Slack", int((tk["slack_status"] == "sent").sum()))
-        edited = st.data_editor(
+        c3.metric("In progress", int((tk["status"] == "in progress").sum()))
+        c4.metric("Resolved", int((tk["status"] == "resolved").sum()))
+        st.dataframe(
             tk[["id", "status", "tier", "rule", "claim_id", "team", "owner", "sim_date",
-                "next_step", "summary", "slack_status"]],
-            hide_index=True, width="stretch", disabled=[c for c in tk.columns if c != "status"],
-            column_config={"status": st.column_config.SelectboxColumn(
-                "Status", options=["open", "in progress", "resolved"])},
-            key=f"tickets_{len(tk)}")  # new tickets reset edit state so edits never shift rows
-        changed = edited.merge(tk[["id", "status"]], on="id", suffixes=("", "_old"))
-        changed = changed[changed["status"] != changed["status_old"]]
-        if not changed.empty:
-            with store.connect() as con:
-                for r in changed.itertuples():
-                    store.set_status(con, int(r.id), r.status)
-            st.rerun()
+                "next_step", "action_taken", "handled_by", "calendar_link", "summary", "slack_status"]],
+            hide_index=True, width="stretch",
+            column_config={"calendar_link": st.column_config.LinkColumn("Calendar", display_text="Open"),
+                           "action_taken": "Action (from Slack)", "handled_by": "By"})
+
+    ticket_queue()
 
 # ---------------------------------------------------------------- data & method
 with tab_method:
