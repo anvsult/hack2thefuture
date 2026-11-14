@@ -83,7 +83,10 @@ def load(data_dir: Path = DATA_DIR) -> tuple[pd.DataFrame, pd.DataFrame, list[di
 
     p["term_end"] = p["start_date"] + pd.Timedelta(days=365)
     p["renewed"] = p["renewal_status"].eq("Renewed")
-    p["outcome_known"] = p["renewal_status"].isin(["Renewed", "Not Renewed", "Cancelled"])
+    # A renewal outcome is known only when the term ended before the extract date.
+    # (Mid-term 2026 cancellations would otherwise count as non-renewals.)
+    p["outcome_known"] = (p["renewal_status"].isin(["Renewed", "Not Renewed", "Cancelled"])
+                          & (p["term_end"] <= EXTRACT_DATE))
 
     # --- claims -------------------------------------------------------------------
     dups = c.duplicated().sum()

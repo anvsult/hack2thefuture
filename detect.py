@@ -79,6 +79,8 @@ def detect(claims: pd.DataFrame, today: pd.Timestamp, predictor: Predictor,
             alerts.append(_alert(r, "review_stall", "critical",
                                  f"$10k+ claim open {r.age} days (review limit {sla} days)",
                                  load_by_team, uplift))
+    if not alerts:
+        return pd.DataFrame()
     out = pd.DataFrame(alerts)
     return out.sort_values(["tier", "premium_at_risk"], ascending=[True, False]).reset_index(drop=True)
 
@@ -115,6 +117,24 @@ def _alert(r, rule: str, tier: str, why: str, load_by_team: pd.Series, uplift: f
         "owner": TEAM_LEADS[r.adjuster_team],
         "next_step": "; ".join(steps),
     }
+
+
+def crossings(claims: pd.DataFrame, uplift: float, days: int = 30) -> pd.DataFrame:
+    """Claims that were still open `days` after being reported, with the crossing date.
+
+    risk = premium x uplift when the policy's renewal was still ahead at the crossing.
+    """
+    x = claims.copy()
+    x["cross_date"] = x["reported_date"] + pd.Timedelta(days=days)
+    x = x[x["closed_date"].isna() | (x["closed_date"] > x["cross_date"])]
+    x["risk"] = np.where(x["term_end"] > x["cross_date"], x["annual_premium"] * uplift, 0.0)
+    return x[["claim_id", "policy_id", "adjuster_team", "city", "cross_date", "risk"]]
+
+
+def risk_since(cross: pd.DataFrame, start: pd.Timestamp, today: pd.Timestamp) -> float:
+    """Renewal premium put at risk by claims crossing 30 days in [start, today]; one count per policy."""
+    w = cross[(cross["cross_date"] >= start) & (cross["cross_date"] <= today)]
+    return float(w.groupby("policy_id")["risk"].max().sum())
 
 
 def premium_at_risk_total(alerts: pd.DataFrame) -> float:

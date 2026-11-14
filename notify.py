@@ -1,12 +1,19 @@
-"""Ticket summaries (Claude, with a template fallback) and Slack delivery (with dry-run)."""
+"""Ticket summaries (Gemini, with a template fallback) and Slack delivery (with dry-run).
+
+Configuration comes from environment variables (loaded from .env by app.py):
+- SLACK_WEBHOOK_URL: Slack incoming webhook
+- GEMINI_API_KEY: Google AI Studio key (free tier)
+- GEMINI_MODEL: optional model override
+"""
 from __future__ import annotations
 
 import os
 
 import requests
 
-MODEL = "claude-opus-5-5"
 SLACK_ENV = "SLACK_WEBHOOK_URL"
+GEMINI_ENV = "GEMINI_API_KEY"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 SYSTEM = (
     "You write short alerts for an insurance claims operations team. "
@@ -23,30 +30,32 @@ def template_summary(a: dict) -> str:
             f"{a['reason']}.{risk} Next step: {a['next_step']}.")
 
 
-def claude_summary(a: dict, timeout: float = 8.0) -> tuple[str, str]:
-    """Return (text, source). Falls back to the template on any failure, so the demo never blocks."""
-    try:
-        import anthropic
+def ai_configured() -> bool:
+    return bool(os.environ.get(GEMINI_ENV))
 
-        client = anthropic.Anthropic(timeout=timeout, max_retries=0)
+
+def ai_summary(a: dict, timeout_s: float = 8.0) -> tuple[str, str]:
+    """Return (text, source). Falls back to the template on any failure, so the demo never blocks."""
+    if not ai_configured():
+        return template_summary(a), "template"
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=os.environ[GEMINI_ENV],
+                              http_options=types.HttpOptions(timeout=int(timeout_s * 1000)))
         facts = "\n".join(f"{k}: {a[k]}" for k in (
             "claim_id", "claim_type", "claim_amount", "team", "city", "rule", "tier",
             "reason", "age", "predicted", "days_to_renewal", "premium_at_risk", "owner",
             "next_step"))
-        resp = client.beta.messages.create(
-            model=MODEL,
-            max_tokens=2048,
-            output_config={"effort": "low"},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            system=SYSTEM,
-            messages=[{"role": "user", "content": facts}],
+        resp = client.models.generate_content(
+            model=os.environ.get("GEMINI_MODEL", DEFAULT_MODEL),
+            contents=facts,
+            config=types.GenerateContentConfig(system_instruction=SYSTEM, max_output_tokens=1024),
         )
-        if resp.stop_reason == "refusal":
-            return template_summary(a), "template"
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
-        return (text, "claude") if text else (template_summary(a), "template")
-    except Exception:  # missing key, network, timeout, API error: keep the demo moving
+        text = (resp.text or "").strip()
+        return (text, "gemini") if text else (template_summary(a), "template")
+    except Exception:  # bad key, quota, network, timeout: keep the demo moving
         return template_summary(a), "template"
 
 

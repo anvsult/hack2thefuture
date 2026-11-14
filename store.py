@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     next_step     TEXT,
     premium_at_risk REAL,
     summary       TEXT,
-    summary_source TEXT,              -- 'claude' or 'template'
+    summary_source TEXT,              -- 'gemini' or 'template'
     status        TEXT NOT NULL DEFAULT 'open',
     slack_status  TEXT,               -- 'sent', 'dry-run', 'failed: ...'
     UNIQUE (claim_id, rule, tier)     -- dedupe: one ticket per claim, rule and tier
@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS tickets (
 
 
 @contextmanager
-def connect(path: Path = DB_PATH):
-    con = sqlite3.connect(path)
+def connect(path: Path | None = None):
+    con = sqlite3.connect(path or DB_PATH)
     con.row_factory = sqlite3.Row
     try:
         con.executescript(SCHEMA)

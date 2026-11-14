@@ -7,11 +7,15 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from dotenv import load_dotenv
 
-import notify
+load_dotenv()  # SLACK_WEBHOOK_URL, GEMINI_API_KEY from the local .env file (gitignored)
+
+import notify  # noqa: E402
 import store
 from data import EXTRACT_DATE, load, open_on, renewal_by_wait
-from detect import Thresholds, detect, premium_at_risk_total, renewal_uplift, review_sla
+from detect import (Thresholds, crossings, detect, premium_at_risk_total, renewal_uplift,
+                    review_sla, risk_since)
 from predict import evaluate, feature_importance, train
 
 st.set_page_config(page_title="Claims Delay Watch", page_icon=":material/monitoring:", layout="wide")
@@ -21,7 +25,7 @@ TEAM_COLOR = {"Team A": "#2a78d6", "Team B": "#eb6834", "Team C": "#1baf7a"}
 FOCUS, MUTED = "#2a78d6", "#a8a7a1"
 MAX_SENDS_PER_RUN = 5          # Slack messages per rerun; the rest become one digest line
 SIM_START, SIM_END = pd.Timestamp("2025-03-01"), EXTRACT_DATE
-DEFAULT_DAY = pd.Timestamp("2026-01-20")
+DEFAULT_DAY = pd.Timestamp("2026-06-26")  # one +1 week step fires a Team C reassign and a review stall
 
 
 # ---------------------------------------------------------------- cached data
@@ -88,7 +92,9 @@ with st.sidebar:
     st.header("Actions")
     dry_run = st.toggle("Dry run (log only, do not post to Slack)", value=True)
     st.caption(f"Slack webhook: {'configured' if notify.slack_configured() else 'not set ($SLACK_WEBHOOK_URL)'}")
-    use_claude = st.toggle("Claude-written summaries for Slack posts", value=True)
+    use_ai = st.toggle("Gemini-written summaries for Slack posts", value=True,
+                       disabled=not notify.ai_configured(),
+                       help=None if notify.ai_configured() else "Set GEMINI_API_KEY in .env to enable.")
     if st.button("Reset demo (clear tickets)", type="secondary", width="stretch"):
         with store.connect() as con:
             store.reset(con)
@@ -118,7 +124,7 @@ def run_actions(alerts: pd.DataFrame) -> list[dict]:
                 continue
             if i < MAX_SENDS_PER_RUN:
                 live = not dry_run and notify.slack_configured()
-                summary, src = (notify.claude_summary(a) if (use_claude and live)
+                summary, src = (notify.ai_summary(a) if (use_ai and live)
                                 else (notify.template_summary(a), "template"))
                 slack = notify.send_slack(notify.slack_text(a, summary, sim), dry_run)
             else:
@@ -141,9 +147,14 @@ st.caption("Millennium Mutual · slow claims cost renewals · data extracted 202
 
 open_now = open_on(claims, today)
 age = (today - claims.loc[open_now, "reported_date"]).dt.days
-k1, k2, k3, k4 = st.columns(4)
+cross = crossings(claims, uplift["uplift"])
+year_start = today.replace(month=1, day=1)
+k0, k1, k2, k3, k4 = st.columns(5)
+k0.metric(f"Put at risk in {today.year}", f"${risk_since(cross, year_start, today):,.0f}",
+          help="Claims that passed 30 days open since Jan 1, with the policy renewal still ahead: "
+               f"premium x {uplift['uplift']:.0%}. One count per policy.")
 k1.metric("Premium at risk now", f"${premium_at_risk_total(alerts):,.0f}",
-          help=f"Sum over flagged policies with a future renewal: premium x {uplift['uplift']:.0%} "
+          help=f"Critical alerts today with a future renewal: premium x {uplift['uplift']:.0%} "
                f"(renewal {uplift['fast_rate']:.0%} when claims close within 30 days vs "
                f"{uplift['slow_rate']:.0%} after 30 days).")
 k2.metric("Open claims", int(open_now.sum()))
@@ -170,7 +181,7 @@ with tab_exec:
                           xaxis_title="Longest claim wait in the policy year", height=360,
                           margin=dict(t=10, b=10), bargap=0.35)
         st.plotly_chart(fig, width="stretch")
-        st.caption(f"Policies whose renewal decision is known (started before Nov 2025). "
+        st.caption(f"Policies whose term ended by 2026-10-31, so the renewal decision is known. "
                    f"30+ days: n={uplift['slow_n']}; 30 days or less: n={uplift['fast_n']}.")
 
     with right:
@@ -198,6 +209,23 @@ with tab_exec:
 
     left2, right2 = st.columns(2)
     with left2:
+        st.subheader("Claims passing 30 days open, by team")
+        cq2 = cross[(cross["cross_date"] <= today) & (cross["cross_date"] >= pd.Timestamp("2025-01-01"))].copy()
+        cq2["q"] = cq2["cross_date"].dt.to_period("Q").astype(str)
+        g3 = cq2.groupby(["q", "adjuster_team"]).size().unstack(fill_value=0)
+        fig = go.Figure()
+        for team in TEAM_COLOR:
+            if team in g3:
+                fig.add_trace(go.Bar(x=g3.index, y=g3[team], name=team, marker_color=TEAM_COLOR[team],
+                                     marker_cornerradius=4,
+                                     hovertemplate=f"{team}<br>%{{x}}: %{{y}} claims<extra></extra>"))
+        fig.update_layout(barmode="group", bargap=0.25, bargroupgap=0.08, height=320,
+                          yaxis_title="Claims passing 30 days", margin=dict(t=10, b=10),
+                          legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig, width="stretch")
+        st.caption(f"Grows with the simulated clock (through {today.date()}). "
+                   "Each bar is a renewal put at risk; Team C jumps in 2026 Q2.")
+    with right2:
         st.subheader("$10k+ claims wait about twice as long, on every team")
         cs = claims.dropna(subset=["closed_date", "claim_amount"])
         g2 = cs.groupby(["adjuster_team", "large"])["days_to_close"].mean().unstack()
@@ -210,7 +238,9 @@ with tab_exec:
                           yaxis_title="Average days to close", margin=dict(t=10, b=10),
                           legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig, width="stretch")
-    with right2:
+
+    left3, right3 = st.columns(2)
+    with left3:
         st.subheader("Where the claims money goes: broker B07")
         pv = policies[policies["premium_valid"]].copy()
         paid = claims.groupby("policy_id")["paid_amount"].sum()
@@ -231,8 +261,9 @@ with tab_exec:
         st.caption("B07 (mostly Toronto): 60 of its 70 claims are theft. "
                    "This is an underwriting question, not a reason to slow every broker.")
 
-    st.subheader("Recommendation")
-    st.markdown(
+    with right3:
+      st.subheader("Recommendation")
+      st.markdown(
         "1. **Fix Team C, not the whole department.** Rebalance Montreal and Quebec City claims to "
         "Teams A and B now, and find out what changed at Team C in January 2026.\n"
         "2. **Add a fast lane for $10k+ senior review.** It doubles wait time on every team.\n"
@@ -274,7 +305,7 @@ with tab_alerts:
             hide_index=True, width="stretch", disabled=[c for c in tk.columns if c != "status"],
             column_config={"status": st.column_config.SelectboxColumn(
                 "Status", options=["open", "in progress", "resolved"])},
-            key="tickets")
+            key=f"tickets_{len(tk)}")  # new tickets reset edit state so edits never shift rows
         changed = edited.merge(tk[["id", "status"]], on="id", suffixes=("", "_old"))
         changed = changed[changed["status"] != changed["status_old"]]
         if not changed.empty:
