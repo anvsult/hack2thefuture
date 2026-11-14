@@ -21,7 +21,8 @@ LANE_FILL = ["rgba(127,127,127,0.06)", "rgba(127,127,127,0.12)"]
 
 def _jitter(claim_id: str) -> float:
     """Stable vertical offset inside the lane, so a dot never jumps between frames."""
-    return (zlib.crc32(claim_id.encode()) % 1000) / 1000 * 0.7 - 0.35
+    # -0.20..+0.38 of a lane: the top of each lane stays free for its title.
+    return (zlib.crc32(claim_id.encode()) % 1000) / 1000 * 0.58 - 0.20
 
 
 def _frame(claims: pd.DataFrame, day: pd.Timestamp, start: pd.Timestamp, crit: int,
@@ -55,7 +56,10 @@ def _frame(claims: pd.DataFrame, day: pd.Timestamp, start: pd.Timestamp, crit: i
     return {
         "title": {"text": day.strftime("%a %b %-d, %Y"),
                   "subtext": f"{len(op)} open claims  ·  {past} past {crit} days"},
-        "series": [{"data": data, "markArea": {"silent": True, "data": lanes}}],
+        "series": [{"data": data, "markArea": {"silent": True, "data": lanes,
+                                                 "label": {"position": "insideTopLeft", "padding": [6, 8],
+                                                           "color": "#7a7973", "fontSize": 12,
+                                                           "fontWeight": "bold"}}}],
     }
 
 
@@ -97,9 +101,10 @@ def build_spec(claims: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timesta
             "emphasis": {"scale": 1.3},
             "markLine": {"silent": True, "symbol": "none", "animation": False, "data": [
                 {"xAxis": warn, "lineStyle": {"color": AMBER, "type": "dashed", "width": 1},
-                 "label": {"formatter": "warn", "color": AMBER}},
+                 "label": {"formatter": "warn", "color": AMBER, "position": "start", "distance": 6}},
                 {"xAxis": crit, "lineStyle": {"color": RED, "type": "solid", "width": 2},
-                 "label": {"formatter": "renewal cliff", "color": RED}},
+                 "label": {"formatter": "renewal cliff", "color": RED, "position": "start", "distance": 6,
+                           "fontWeight": "bold"}},
             ]},
         }],
     }

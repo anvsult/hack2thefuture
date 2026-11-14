@@ -214,24 +214,28 @@ change = st.session_state.get("change")
 delta = (change or {}).get("delta", {})
 
 
-def fmt_delta(key: str, money: bool = False):
-    if key not in delta or delta[key] == 0:
-        return None
+def delta_args(key: str, money: bool = False) -> dict:
+    """Always render a delta row so every tile keeps the same height, with or without a change."""
+    if key not in delta:  # no clock step yet (or year changed for the year-to-date tile)
+        return {"delta": "—", "delta_color": "off", "delta_arrow": "off"}
     v = delta[key]
-    return f"{'+' if v > 0 else '-'}${abs(v):,.0f}" if money else f"{v:+d}"
+    if v == 0:
+        return {"delta": "No change", "delta_color": "off", "delta_arrow": "off"}
+    text = f"{'+' if v > 0 else '-'}${abs(v):,.0f}" if money else f"{v:+d}"
+    return {"delta": text, "delta_color": "inverse"}  # a rise is bad news on every tile
 
 
 k0, k1, k2, k3, k4 = st.columns(5)
-k0.metric(f"Put at risk in {today.year}", f"${now_k['ytd']:,.0f}", fmt_delta("ytd", True), delta_color="inverse",
+k0.metric(f"Put at risk in {today.year}", f"${now_k['ytd']:,.0f}", **delta_args("ytd", True),
           help="Claims that passed 30 days open since Jan 1, with the policy renewal still ahead: "
                f"premium x {uplift['uplift']:.0%}. One count per policy.")
-k1.metric("Premium at risk now", f"${now_k['now']:,.0f}", fmt_delta("now", True), delta_color="inverse",
+k1.metric("Premium at risk now", f"${now_k['now']:,.0f}", **delta_args("now", True),
           help=f"Critical alerts today with a future renewal: premium x {uplift['uplift']:.0%} "
                f"(renewal {uplift['fast_rate']:.0%} when claims close within 30 days vs "
                f"{uplift['slow_rate']:.0%} after 30 days).")
-k2.metric("Open claims", now_k["open"], fmt_delta("open"), delta_color="inverse")
-k3.metric(f"Open {th.critical_days}+ days", now_k["past"], fmt_delta("past"), delta_color="inverse")
-k4.metric("Claims needing action", now_k["crit"], fmt_delta("crit"), delta_color="inverse",
+k2.metric("Open claims", now_k["open"], **delta_args("open"))
+k3.metric(f"Open {th.critical_days}+ days", now_k["past"], **delta_args("past"))
+k4.metric("Claims needing action", now_k["crit"], **delta_args("crit"),
           help=f"Open claims with a critical alert: already {th.critical_days}+ days old, predicted to pass "
                f"{th.critical_days} days, or a $10k+ claim stuck in senior review. Each claim counts once. "
                f"The gap to 'Open {th.critical_days}+ days' is the claims caught early by the prediction.")
